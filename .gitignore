@@ -1,0 +1,23 @@
+# 编译产物（exe 走 Release 发布，不进仓库）
+dist/
+*.exe
+*.pdb
+*.obj
+*.ilk
+
+# 客户资料、体检报告、操作记录（含真实门店名/设备名，禁止外传）
+报告/
+专业报告/
+清理记录/
+维护记录/
+
+# 开发临时文件
+*.tmp
+*.bak
+*.log
+*.pdf
+
+# 系统文件
+Thumbs.db
+desktop.ini
+.DS_Store
