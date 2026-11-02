@@ -4,6 +4,14 @@
 
 Windows 10 / 11 直接运行，用系统自带的 `csc.exe` 编译，**不需要安装 .NET SDK 或运行时**，客户机器零依赖。
 
+## 下载
+
+仓库已公开，下载无需登录 GitHub：
+
+https://github.com/66likedo/66-store-check/releases/download/v1.0.0/66StoreCheck-v1.0.0.zip
+
+解压后得到下面四个程序。最新版本见 [Releases](https://github.com/66likedo/66-store-check/releases)。
+
 ## 四个程序
 
 | 程序 | 用途 | 是否改系统 |
@@ -95,9 +103,8 @@ gh release upload v1.1.0 $zip --repo 66likedo/66-store-check --clobber
 **GitHub 不支持中文附件名。**
 上传中文文件名的 exe 时，接口会把名字截断成 `66.exe`，多个文件互相覆盖。已验证 `gh release upload`、HttpClient、原生 REST 三种方式均复现。所以四个程序统一打包成 `66StoreCheck-版本号.zip` 发布，解压后文件名仍是中文。
 
-**私有仓库的 Release 需要登录才能下载。**
-当前仓库为私有，只有仓库所有者能下载附件。要发给客户，要么把仓库改为公开，要么直接传文件（微信、网盘）。
-
 ## 仓库
 
 https://github.com/66likedo/66-store-check
+
+公开仓库，源码与 Release 附件均可匿名访问，客户直接下载即可。
