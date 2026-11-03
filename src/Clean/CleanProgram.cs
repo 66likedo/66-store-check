@@ -10,7 +10,7 @@ namespace StoreCheck
 {
     public static class CleanProgram
     {
-        private const string Ver = "1.0";
+        private const string Ver = "1.1";
 
         public static int Main(string[] args)
         {

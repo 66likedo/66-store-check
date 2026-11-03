@@ -8,7 +8,7 @@ Windows 10 / 11 直接运行，用系统自带的 `csc.exe` 编译，**不需要
 
 仓库已公开，下载无需登录 GitHub：
 
-https://github.com/66likedo/66-store-check/releases/download/v1.0.0/66StoreCheck-v1.0.0.zip
+https://github.com/66likedo/66-store-check/releases/download/v1.1.0/66StoreCheck-v1.1.0.zip
 
 解压后得到下面四个程序。最新版本见 [Releases](https://github.com/66likedo/66-store-check/releases)。
 
