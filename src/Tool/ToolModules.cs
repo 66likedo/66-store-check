@@ -739,8 +739,47 @@ namespace StoreCheck
             }
             string p = Tool.SaveLog("重复文件扫描", "目录：" + root + "  最小 " + minMB + "MB");
             if (p.Length > 0) Ui.L("  记录：" + p, ConsoleColor.Cyan);
+            string c = ExportCsv(groups);
+            if (c.Length > 0) Ui.L("  表格：" + c + "（Excel 可直接打开）", ConsoleColor.Cyan);
             Ui.L("  本功能只报告，不删除任何文件。", ConsoleColor.DarkGray);
             Tool.PauseExit("", ConsoleColor.Gray);
+        }
+
+        /// 导出为 CSV，供 Excel/WPS 直接打开筛选
+        private static string ExportCsv(List<List<string>> groups)
+        {
+            try
+            {
+                if (!Directory.Exists(Tool.LogDir)) Directory.CreateDirectory(Tool.LogDir);
+                string p = Path.Combine(Tool.LogDir, "重复文件扫描_" + Tool.Stamp + ".csv");
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("组号,同组份数,序号,大小(MB),路径");
+                for (int i = 0; i < groups.Count; i++)
+                {
+                    List<string> g = groups[i];
+                    long sz = 0;
+                    try { sz = new FileInfo(g[0]).Length; } catch (Exception) { }
+                    string mb = ((double)sz / 1024 / 1024).ToString("0.00");
+                    for (int j = 0; j < g.Count; j++)
+                    {
+                        sb.Append(i + 1).Append(',')
+                          .Append(g.Count).Append(',')
+                          .Append(j + 1).Append(',')
+                          .Append(mb).Append(',')
+                          .Append(Esc(g[j])).AppendLine();
+                    }
+                }
+                // 带 BOM，Excel 双击打开中文不乱码
+                File.WriteAllText(p, sb.ToString(), new UTF8Encoding(true));
+                return p;
+            }
+            catch (Exception) { return ""; }
+        }
+
+        private static string Esc(string s)
+        {
+            if (s.IndexOf(',') < 0 && s.IndexOf('"') < 0 && s.IndexOf('\n') < 0 && s.IndexOf('\r') < 0) return s;
+            return "\"" + s.Replace("\"", "\"\"") + "\"";
         }
 
         private static string Hash(string path)
