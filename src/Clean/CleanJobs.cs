@@ -681,6 +681,7 @@ namespace StoreCheck
             string dir = Path.Combine(BackupDir, "快捷方式");
             try { Directory.CreateDirectory(dir); } catch (Exception) { }
             int ok = 0;
+            List<string[]> moved = new List<string[]>();
             foreach (string f in dead)
             {
                 try
@@ -693,6 +694,7 @@ namespace StoreCheck
                         n++;
                     }
                     File.Move(f, dst);
+                    moved.Add(new string[] { f, dst });
                     ok++;
                     j.Removed.Add("已移出：" + Path.GetFileName(f));
                 }
@@ -702,8 +704,163 @@ namespace StoreCheck
                     if (j.FailSample.Count < 5) j.FailSample.Add(Path.GetFileName(f) + "：" + Fmt.Cut(Fmt.Clean(ex.Message), 36));
                 }
             }
+            // 写还原清单：原位置 → 备份位置，供“一键还原上次清理”使用
+            try
+            {
+                StringBuilder mani = new StringBuilder();
+                foreach (string[] m in moved) mani.AppendLine(m[0] + "\t" + m[1]);
+                File.WriteAllText(Path.Combine(dir, "还原清单.txt"), mani.ToString(), new UTF8Encoding(true));
+            }
+            catch (Exception) { }
             j.DoneFiles = ok;
             j.Result = "移出 " + ok + " 个失效快捷方式（备份可还原）";
+        }
+
+        // ------------------------------------------------------------
+        // 一键还原上次清理（快捷方式自动放回；注册表 .reg 提示双击导入）
+        // ------------------------------------------------------------
+        public static bool RestoreLast(out string report)
+        {
+            StringBuilder rep = new StringBuilder();
+            bool okSomething = false;
+            try
+            {
+                if (string.IsNullOrEmpty(LogDir))
+                {
+                    report = "没有找到清理记录目录，无法还原。";
+                    return false;
+                }
+                string[] dirs = Directory.GetDirectories(LogDir, "备份_*");
+                if (dirs.Length == 0)
+                {
+                    report = "没有找到清理备份（" + LogDir + "\\备份_*）。可能还没做过带备份的清理。";
+                    return false;
+                }
+                Array.Sort(dirs);
+                string dir = dirs[dirs.Length - 1];
+                rep.AppendLine("本次还原使用的备份目录：");
+                rep.AppendLine("  " + dir);
+
+                // 1) 快捷方式：优先按“还原清单.txt”精确放回
+                string sdir = Path.Combine(dir, "快捷方式");
+                int restored = 0, skipped = 0, failed = 0;
+                if (Directory.Exists(sdir))
+                {
+                    string mani = Path.Combine(sdir, "还原清单.txt");
+                    if (File.Exists(mani))
+                    {
+                        foreach (string line in File.ReadAllLines(mani, Encoding.UTF8))
+                        {
+                            string t = line.Trim();
+                            if (t.Length == 0) continue;
+                            string[] cols = t.Split('\t');
+                            if (cols.Length < 2) continue;
+                            string orig = cols[0].Trim();
+                            string backup = cols[1].Trim();
+                            try
+                            {
+                                if (!File.Exists(backup)) { failed++; continue; }
+                                if (File.Exists(orig)) { skipped++; continue; }
+                                string parent = Path.GetDirectoryName(orig);
+                                if (!string.IsNullOrEmpty(parent) && !Directory.Exists(parent)) Directory.CreateDirectory(parent);
+                                try { File.Move(backup, orig); }
+                                catch (Exception)
+                                {
+                                    File.Copy(backup, orig, true);
+                                    File.Delete(backup);
+                                }
+                                restored++;
+                            }
+                            catch (Exception) { failed++; }
+                        }
+                    }
+                    else
+                    {
+                        // 旧版本备份没有清单：只能放回当前用户桌面，同名加序号
+                        string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                        foreach (string f in Directory.GetFiles(sdir, "*.lnk"))
+                        {
+                            try
+                             {
+                                string dst = Path.Combine(desk, Path.GetFileName(f));
+                                int n = 2;
+                                while (File.Exists(dst))
+                                {
+                                    dst = Path.Combine(desk, Path.GetFileNameWithoutExtension(f) + "_" + n + ".lnk");
+                                    n++;
+                                }
+                                File.Copy(f, dst, false);
+                                restored++;
+                            }
+                            catch (Exception) { failed++; }
+                        }
+                        if (restored > 0) rep.AppendLine("  （旧备份没有还原清单，已统一放回桌面，请自行拖回原位）");
+                    }
+                }
+
+                // 2) 注册表 .reg：只列出，双击导入即可（自动导入风险高，交给人工确认）
+                string[] regs = Directory.GetFiles(dir, "注册表_*.reg", SearchOption.TopDirectoryOnly);
+                rep.AppendLine("");
+                rep.AppendLine("快捷方式：放回 " + restored + " 个，跳过（原位置已有）" + skipped + " 个，失败 " + failed + " 个。");
+                if (restored > 0 || failed > 0) okSomething = true;
+                if (regs.Length > 0)
+                {
+                    rep.AppendLine("注册表备份 " + regs.Length + " 个（双击下面的 .reg 文件导入即可还原）：");
+                    foreach (string r in regs) rep.AppendLine("  · " + r);
+                    okSomething = true;
+                }
+                else
+                {
+                    rep.AppendLine("这次备份里没有注册表文件。");
+                }
+                if (!okSomething) rep.AppendLine("备份里没有可还原的内容。");
+                report = rep.ToString();
+                return okSomething;
+            }
+            catch (Exception ex)
+            {
+                report = "还原失败：" + Fmt.Clean(ex.Message);
+                return false;
+            }
+        }
+
+        // ------------------------------------------------------------
+        // 清理结果 CSV（UTF8 BOM，Excel 双击不乱码）
+        // ------------------------------------------------------------
+        public static string ExportCsv(List<CleanJob> jobs)
+        {
+            try
+            {
+                if (jobs == null || jobs.Count == 0) return "";
+                if (string.IsNullOrEmpty(LogDir)) return "";
+                if (!Directory.Exists(LogDir)) Directory.CreateDirectory(LogDir);
+                string path = Path.Combine(LogDir, "清理结果_" + SafeName(Environment.MachineName) + "_" + _stamp + ".csv");
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("编号,检测项,风险,说明,可清理,文件数,实际删除文件,实际释放,失败,结果");
+                foreach (CleanJob j in jobs)
+                {
+                    sb.Append(j.Id).Append(',')
+                      .Append(Csv(j.Name)).Append(',')
+                      .Append(j.Risk == Risk.Low ? "低" : (j.Risk == Risk.Mid ? "中" : "高")).Append(',')
+                      .Append(Csv(j.Desc)).Append(',')
+                      .Append(Csv(Fmt.G(j.Bytes))).Append(',')
+                      .Append(j.Files).Append(',')
+                      .Append(j.DoneFiles).Append(',')
+                      .Append(Csv(Fmt.G(j.DoneBytes))).Append(',')
+                      .Append(j.FailFiles).Append(',')
+                      .Append(Csv(j.Result)).AppendLine();
+                }
+                File.WriteAllText(path, sb.ToString(), new UTF8Encoding(true));
+                return path;
+            }
+            catch (Exception) { return ""; }
+        }
+
+        private static string Csv(string s)
+        {
+            if (s == null) return "";
+            if (s.IndexOf(',') < 0 && s.IndexOf('"') < 0 && s.IndexOf('\n') < 0 && s.IndexOf('\r') < 0) return s;
+            return "\"" + s.Replace("\"", "\"\"") + "\"";
         }
 
         // ------------------------------------------------------------
@@ -887,6 +1044,37 @@ namespace StoreCheck
                 bool logOk = File.Exists(lp);
                 sb.AppendLine("日志写入：" + (logOk ? "正常" : "失败"));
                 if (!logOk) { ok = false; sb.AppendLine("FAIL：日志没写出来"); }
+
+                // CSV 导出链路（带逗号/引号的字段也要能正确转义）
+                CleanJob cj = new CleanJob();
+                cj.Id = 1; cj.Name = "测试,项"; cj.Risk = Risk.Low; cj.Desc = "含\"引号\"";
+                cj.Bytes = 12345; cj.Files = 3; cj.DoneFiles = 2; cj.DoneBytes = 4096; cj.FailFiles = 1;
+                cj.Result = "完成";
+                string csv = ExportCsv(new List<CleanJob> { cj });
+                bool csvOk = csv.Length > 0 && File.Exists(csv);
+                sb.AppendLine("CSV 导出：" + (csvOk ? "正常" : "失败"));
+                if (!csvOk) { ok = false; sb.AppendLine("FAIL：CSV 没写出来"); }
+
+                // 一键还原：在沙箱里造一份“快捷方式备份 + 还原清单”
+                string rst = Path.Combine(Path.GetTempPath(), "66clean_restoretest");
+                try { if (Directory.Exists(rst)) Directory.Delete(rst, true); } catch (Exception) { }
+                string rstLog = Path.Combine(rst, "清理记录");
+                string bdir = Path.Combine(rstLog, "备份_20260101_000000", "快捷方式");
+                Directory.CreateDirectory(bdir);
+                string orig = Path.Combine(rst, "原位置", "测试快捷方式.lnk");
+                string bak = Path.Combine(bdir, "测试快捷方式.lnk");
+                File.WriteAllText(bak, "dummy");
+                File.WriteAllText(Path.Combine(bdir, "还原清单.txt"), orig + "\t" + bak + "\r\n", new UTF8Encoding(true));
+                File.WriteAllText(Path.Combine(rstLog, "备份_20260101_000000", "注册表_HKLM_Test.reg"), "dummy");
+                LogDir = rstLog;
+                BackupDir = "";
+                string rr;
+                bool rOk = RestoreLast(out rr);
+                bool restored = File.Exists(orig) && !File.Exists(bak);
+                sb.AppendLine("一键还原：" + (rOk && restored ? "正常（清单路径已放回）" : "失败"));
+                if (!(rOk && restored)) { ok = false; sb.AppendLine("FAIL：还原没把文件放回原位置"); }
+                try { Directory.Delete(rst, true); } catch (Exception) { }
+
                 try { Directory.Delete(logTest, true); } catch (Exception) { }
                 try { File.Delete(outside); } catch (Exception) { }
             }

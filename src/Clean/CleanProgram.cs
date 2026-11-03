@@ -14,7 +14,7 @@ namespace StoreCheck
 
         public static int Main(string[] args)
         {
-            bool plan = false, yes = false, degraded = false, selftest = false;
+            bool plan = false, yes = false, degraded = false, selftest = false, restore = false;
             string apply = "";
             for (int i = 0; i < args.Length; i++)
             {
@@ -24,6 +24,7 @@ namespace StoreCheck
                 else if (low == "--yes" || low == "/yes") yes = true;
                 else if (low == "--degraded") degraded = true;
                 else if (low == "--selftest") selftest = true;
+                else if (low == "--restore") restore = true;
                 else if (low == "--apply")
                 {
                     if (i + 1 < args.Length) { apply = args[i + 1]; i++; }
@@ -69,6 +70,35 @@ namespace StoreCheck
             try { exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location); }
             catch (Exception) { }
             if (string.IsNullOrEmpty(exeDir)) exeDir = Environment.CurrentDirectory;
+
+            // --restore：命令行直接还原上次清理（便于自动化/沙箱验证）
+            if (restore)
+            {
+                Cleaner.PrepareDirs(exeDir);
+                string rep;
+                bool ok = Cleaner.RestoreLast(out rep);
+                Ui.Blank();
+                Ui.L(rep.TrimEnd(), ok ? ConsoleColor.Green : ConsoleColor.Yellow);
+                return PauseExit("还原结束。", ok ? ConsoleColor.Green : ConsoleColor.Yellow);
+            }
+
+            // 交互模式先问一句：扫描清理，还是还原上次清理
+            if (!plan && apply.Length == 0)
+            {
+                int choice = MainMenu();
+                if (choice == 0) return 0;
+                if (choice == 2)
+                {
+                    Cleaner.PrepareDirs(exeDir);
+                    string rep;
+                    bool ok = Cleaner.RestoreLast(out rep);
+                    Ui.Blank();
+                    Ui.L(rep.TrimEnd(), ok ? ConsoleColor.Green : ConsoleColor.Yellow);
+                    Ui.L("  说明：还原只能把上次移走的快捷方式放回去；已删除的临时文件/缓存/回收站找不回来。", ConsoleColor.DarkGray);
+                    return PauseExit("还原结束。", ok ? ConsoleColor.Green : ConsoleColor.Yellow);
+                }
+            }
+
             if (!plan) Cleaner.PrepareDirs(exeDir);   // 只预演时不建任何目录
 
             // ---------------- 扫描 ----------------
@@ -193,8 +223,10 @@ namespace StoreCheck
             Cleaner.LogLine("执行后 C 盘可用：" + freeAfter);
             string logPath = Cleaner.WriteLog("操作人：" + who + "    权限：" + (admin ? "管理员" : "受限") + "    C 盘：" + freeBefore + " → " + freeAfter);
             if (logPath.Length > 0) Ui.L("  操作日志：" + logPath, ConsoleColor.Cyan);
+            string csv = Cleaner.ExportCsv(picked);
+            if (csv.Length > 0) Ui.L("  结果表格：" + csv + "（Excel 可直接打开）", ConsoleColor.Cyan);
             if (NeedsAnyBackup(picked)) Ui.L("  备份目录：" + Cleaner.BackupDir, ConsoleColor.Cyan);
-            Ui.L("  回滚：注册表 .reg 双击导入；快捷方式从备份拖回原处。", ConsoleColor.DarkGray);
+            Ui.L("  回滚：下次启动选 [2] 一键还原上次清理；注册表 .reg 双击导入。", ConsoleColor.DarkGray);
 
             Ui.Blank();
             Ui.C("  按任意键退出", ConsoleColor.Green);
@@ -202,6 +234,22 @@ namespace StoreCheck
             try { if (!Console.IsInputRedirected) Console.ReadKey(true); }
             catch (Exception) { }
             return 0;
+        }
+
+        /// 主菜单：1=扫描清理，2=一键还原上次清理，0=退出
+        private static int MainMenu()
+        {
+            if (Console.IsInputRedirected) return 1;
+            Ui.Blank();
+            Ui.C("  请选择要做什么：", ConsoleColor.Cyan);
+            Ui.L("    [1] 扫描并清理（先看清单，再输入 YES 才动手）", ConsoleColor.Gray);
+            Ui.L("    [2] 一键还原上次清理（快捷方式自动放回，注册表 .reg 双击导入）", ConsoleColor.Gray);
+            Ui.L("    [0] 退出", ConsoleColor.Gray);
+            Ui.C("  >>> ", ConsoleColor.Cyan);
+            string s = ReadLine().Trim().ToLower();
+            if (s == "0" || s == "q") return 0;
+            if (s == "2") return 2;
+            return 1;
         }
 
         private static string Sz(long b)

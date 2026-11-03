@@ -61,14 +61,15 @@ namespace StoreCheck
             Ui.Blank();
 
             Row("1", "数据迁移", "整目录搬到目标盘（源目录不删，自动校验）");
-            Row("2", "迁移校验", "对比源和目标，列差异清单");
+            Row("2", "迁移校验", "对比源和目标；缺失文件可一键补拷");
             Row("3", "启动项管理", "禁用 / 启用 / 删除自启项（先导出 .reg）");
             Row("4", "目录修复", "桌面/文档/图片改回默认位置");
-            Row("5", "重复文件扫描", "按哈希找重复，只报告不删");
+            Row("5", "重复文件扫描", "按哈希找重复；可按组备份并清理副本");
             Row("6", "乱码名清理", "修复编码错乱的文件名，先预览再改");
-            Row("7", "卸载建议", "按装机捆绑/重复功能给建议，不执行卸载");
+            Row("7", "卸载建议", "给出建议，并可按编号调用官方卸载");
             Row("8", "桌面图标整理", "快捷方式归类，可一键还原");
             Row("9", "个性化修复", "图标缓存 / 右键菜单 / 外壳");
+            Row("10", "卸载残留扫描", "查注册表/安装目录残留，只报告不删除");
             Row("0", "环境自检", "只读检查运行环境");
             Ui.Blank();
             Ui.L("      输入编号回车；q 退出", ConsoleColor.Cyan);
@@ -95,6 +96,7 @@ namespace StoreCheck
                 case "7": ModuleUninstall.Run(); return 0;
                 case "8": ModuleTidy.Run(); return 0;
                 case "9": ModulePersonal.Run(); return 0;
+                case "10": ModuleResidue.Run(); return 0;
                 case "0": ModuleEnv.Run(); return 0;
                 case "q": return -1;
                 default:

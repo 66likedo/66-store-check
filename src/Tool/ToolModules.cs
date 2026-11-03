@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -260,7 +261,64 @@ namespace StoreCheck
             foreach (string d in diffs) Tool.Log("  差异：" + d);
             string p = Tool.SaveLog("迁移校验", "");
             if (p.Length > 0) Ui.L("  报告：" + p, ConsoleColor.Cyan);
+
+            if (!ok)
+            {
+                List<string> miss = Missing(src, dst, 5000);
+                if (miss.Count > 0)
+                {
+                    Ui.Blank();
+                    Ui.L("  目标缺少 " + miss.Count + " 个文件，可以把它们从源目录补拷过去。", ConsoleColor.Yellow);
+                    if (Tool.Confirm("补拷这 " + miss.Count + " 个缺少的文件？"))
+                    {
+                        int okc = 0, bad = 0;
+                        foreach (string rel in miss)
+                        {
+                            try
+                            {
+                                string s1 = Path.Combine(src, rel);
+                                string d1 = Path.Combine(dst, rel);
+                                string dir = Path.GetDirectoryName(d1);
+                                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                                File.Copy(s1, d1, false);
+                                try { File.SetLastWriteTime(d1, File.GetLastWriteTime(s1)); } catch (Exception) { }
+                                okc++;
+                            }
+                            catch (Exception ex)
+                            {
+                                Tool.Log("补拷失败：" + rel + "  " + Fmt.Clean(ex.Message));
+                                bad++;
+                            }
+                        }
+                        Ui.L("  补拷完成：" + okc + " 个，失败 " + bad + " 个。", okc > 0 ? ConsoleColor.Green : ConsoleColor.Yellow);
+                        Tool.Log("补拷：" + okc + " 个，失败 " + bad + " 个");
+                        string p2 = Tool.SaveLog("迁移补拷", "源：" + src + "  目标：" + dst);
+                        if (p2.Length > 0) Ui.L("  记录：" + p2, ConsoleColor.Cyan);
+                    }
+                }
+                else
+                {
+                    Ui.L("  差异不是缺文件（可能是目标多出文件或大小不一致），请人工核对。", ConsoleColor.DarkGray);
+                }
+            }
             Tool.PauseExit("", ConsoleColor.Gray);
+        }
+
+        /// 列出源目录里有、目标目录里没有的文件（相对路径）
+        private static List<string> Missing(string src, string dst, int max)
+        {
+            List<string> miss = new List<string>();
+            Fs.Walk(src, delegate (string f)
+            {
+                if (miss.Count >= max) return;
+                try
+                {
+                    string rel = f.Substring(src.Length).TrimStart('\\');
+                    if (!File.Exists(Path.Combine(dst, rel))) miss.Add(rel);
+                }
+                catch (Exception) { }
+            });
+            return miss;
         }
     }
 
@@ -741,8 +799,127 @@ namespace StoreCheck
             if (p.Length > 0) Ui.L("  记录：" + p, ConsoleColor.Cyan);
             string c = ExportCsv(groups);
             if (c.Length > 0) Ui.L("  表格：" + c + "（Excel 可直接打开）", ConsoleColor.Cyan);
-            Ui.L("  本功能只报告，不删除任何文件。", ConsoleColor.DarkGray);
+            Ui.L("  默认只报告。要清理某一组的副本，可在下面按组号处理。", ConsoleColor.DarkGray);
+            HandleDup(groups);
             Tool.PauseExit("", ConsoleColor.Gray);
+        }
+
+        /// 按组处理：可一次选多组（1,3,5 或 all），每组保留第一个文件，其余先备份再删除
+        private static void HandleDup(List<List<string>> groups)
+        {
+            if (groups.Count == 0) return;
+            Ui.Blank();
+            Ui.C("  输入组号处理（可写 1,3,5 或 all，直接回车跳过）：", ConsoleColor.Cyan);
+            string line = Tool.ReadLine().Trim();
+            if (line.Length == 0) return;
+
+            List<int> picks = new List<int>();
+            if (line.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                for (int i = 1; i <= groups.Count; i++) picks.Add(i);
+            }
+            else
+            {
+                string[] parts = line.Replace('，', ',').Replace('、', ',').Replace(' ', ',').Split(',');
+                foreach (string one in parts)
+                {
+                    string t = one.Trim();
+                    if (t.Length == 0) continue;
+                    int v = 0;
+                    if (!int.TryParse(t, out v) || v < 1 || v > groups.Count)
+                    {
+                        Ui.L("  跳过无效组号：" + t, ConsoleColor.DarkGray);
+                        continue;
+                    }
+                    if (!picks.Contains(v)) picks.Add(v);
+                }
+            }
+            if (picks.Count == 0)
+            {
+                Ui.Err("  没有有效组号，未做任何处理。");
+                Ui.Pause(900);
+                return;
+            }
+
+            // 先列清单，让店主看清要动哪些文件、大概能省多少
+            List<string> allDel = new List<string>();
+            long total = 0;
+            Ui.L("");
+            foreach (int gi in picks)
+            {
+                List<string> g = groups[gi - 1];
+                if (g.Count < 2) continue;
+                string keep = g[0];
+                List<string> del = new List<string>();
+                foreach (string f in g) if (!string.Equals(f, keep, StringComparison.OrdinalIgnoreCase)) del.Add(f);
+                long sz = 0;
+                foreach (string f in del) { try { sz += new FileInfo(f).Length; } catch (Exception) { } }
+                total += sz;
+                allDel.AddRange(del);
+                Ui.L("  第 " + gi + " 组：保留 " + Fmt.Cut(keep, 78), ConsoleColor.Green);
+                Ui.L("    将处理 " + del.Count + " 个副本，共 " + Tool.Sz(sz), ConsoleColor.Gray);
+            }
+            if (allDel.Count == 0)
+            {
+                Ui.L("  选中的组没有可处理的副本。", ConsoleColor.Yellow);
+                Ui.Pause(900);
+                return;
+            }
+
+            Ui.L("");
+            Ui.L("  合计处理 " + allDel.Count + " 个副本，预计可释放 " + Tool.Sz(total) + "（先备份，确认无用后可清空备份目录真正释放）", ConsoleColor.Yellow);
+            Ui.L("  备份位置：" + Tool.BackupDir, ConsoleColor.DarkGray);
+            if (!Tool.Confirm("确认处理这 " + allDel.Count + " 个副本？"))
+            {
+                Ui.L("  已取消，什么都没有做。", ConsoleColor.Gray);
+                return;
+            }
+
+            Tool.ResetLog();
+            Tool.Log("重复文件处理：选中 " + picks.Count + " 组（" + string.Join(",", picks.ToArray()) + "），共 " + allDel.Count + " 个副本，预计释放 " + Tool.Sz(total));
+            string bdir = Tool.EnsureBackup("重复文件");
+            int done = 0, skip = 0, fail = 0;
+            foreach (string f in allDel)
+            {
+                try
+                {
+                    if (!File.Exists(f)) { Tool.Log("已不存在：" + f); continue; }
+                    FileInfo fi = new FileInfo(f);
+                    if ((fi.Attributes & FileAttributes.ReparsePoint) != 0) { Tool.Log("跳过（链接文件）：" + f); skip++; continue; }
+                    if (DateTime.Now - fi.LastWriteTime < TimeSpan.FromMinutes(30)) { Tool.Log("跳过（30 分钟内改动过）：" + f); skip++; continue; }
+
+                    string name = Path.GetFileName(f);
+                    string target = Path.Combine(bdir, name);
+                    int i = 1;
+                    while (File.Exists(target))
+                    {
+                        target = Path.Combine(bdir, Path.GetFileNameWithoutExtension(name) + "_" + i + Path.GetExtension(name));
+                        i++;
+                    }
+                    try
+                    {
+                        File.Move(f, target);
+                    }
+                    catch (Exception)
+                    {
+                        File.Copy(f, target, true);
+                        File.Delete(f);
+                    }
+                    Tool.Log("已备份并删除：" + f + "  →  " + target);
+                    done++;
+                }
+                catch (Exception ex)
+                {
+                    Tool.Log("失败：" + f + "  " + Fmt.Clean(ex.Message));
+                    fail++;
+                }
+            }
+            Ui.L("");
+            Ui.L("  处理完成：" + done + " 个，跳过 " + skip + " 个，失败 " + fail + " 个。", done > 0 ? ConsoleColor.Green : ConsoleColor.Yellow);
+            Ui.L("  备份目录：" + bdir, ConsoleColor.Cyan);
+            Ui.L("  需要还原时，把备份目录里的文件放回原位置即可。", ConsoleColor.DarkGray);
+            string p2 = Tool.SaveLog("重复文件处理", "选中 " + picks.Count + " 组；处理 " + done + " 个");
+            if (p2.Length > 0) Ui.L("  记录：" + p2, ConsoleColor.Cyan);
         }
 
         /// 导出为 CSV，供 Excel/WPS 直接打开筛选
@@ -1007,7 +1184,7 @@ namespace StoreCheck
                 {
                     if (name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        sug.Add(new string[] { name, "装机捆绑/助手类，功能与系统自带重复，卸载不影响系统" });
+                        sug.Add(new string[] { name, "装机捆绑/助手类，功能与系统自带重复，卸载不影响系统", s[2] });
                         break;
                     }
                 }
@@ -1026,7 +1203,14 @@ namespace StoreCheck
                     foreach (string k in fam)
                         if (k.Length > 0 && s[0].IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0) { if (!hit.Contains(s[0])) hit.Add(s[0]); break; }
                 if (hit.Count >= 2)
-                    sug.Add(new string[] { string.Join(" / ", hit.ToArray()), fam[0] + "类装了 " + hit.Count + " 个，留一个常用的就够" });
+                {
+                    foreach (string h in hit)
+                    {
+                        string cmd = "";
+                        foreach (string[] s in sw) if (s[0] == h) { cmd = s[2]; break; }
+                        sug.Add(new string[] { h, fam[0] + "类装了 " + hit.Count + " 个，留一个常用的就够", cmd });
+                    }
+                }
             }
 
             Ui.Blank();
@@ -1036,19 +1220,69 @@ namespace StoreCheck
                 return;
             }
             Ui.L("  建议关注 " + sug.Count + " 项：", ConsoleColor.Yellow);
-            foreach (string[] s in sug)
+            for (int i = 0; i < sug.Count; i++)
             {
-                Ui.C("  · ", ConsoleColor.DarkYellow);
-                Ui.C(Ui.Pad(Fmt.Cut(s[0], 40), 42), ConsoleColor.Gray);
+                string[] s = sug[i];
+                Ui.C("  [" + (i + 1) + "] ", ConsoleColor.Yellow);
+                Ui.C(Ui.Pad(Fmt.Cut(s[0], 38), 40), ConsoleColor.Gray);
                 Ui.L(Fmt.Cut(s[1], 40), ConsoleColor.DarkGray);
                 Tool.Log("建议：" + s[0] + "  —— " + s[1]);
             }
             Ui.L("");
-            Ui.L("  卸载入口：控制面板 → 程序和功能（或设置 → 应用）。", ConsoleColor.DarkGray);
             Ui.L("  卸载前建议先用 [1] 数据迁移 备份对应软件的配置/数据目录。", ConsoleColor.DarkGray);
+            Ui.L("  卸载完成后，用菜单 [10] 卸载残留扫描（只报告，不删除）。", ConsoleColor.DarkGray);
             string p = Tool.SaveLog("卸载建议", "");
             if (p.Length > 0) Ui.L("  记录：" + p, ConsoleColor.Cyan);
+
+            Ui.Blank();
+            Ui.C("  输入要卸载的编号（直接回车跳过）：", ConsoleColor.Cyan);
+            string pick = Tool.ReadLine().Trim();
+            if (pick.Length == 0) { Tool.PauseExit("", ConsoleColor.Gray); return; }
+            int idx = 0;
+            try { idx = int.Parse(pick); } catch (Exception) { }
+            if (idx < 1 || idx > sug.Count)
+            {
+                Ui.Err("  编号无效，未做任何处理。");
+                Tool.PauseExit("", ConsoleColor.Gray);
+                return;
+            }
+            Uninstall(sug[idx - 1][0], sug[idx - 1][2]);
             Tool.PauseExit("", ConsoleColor.Gray);
+        }
+
+        /// 调用软件自带的卸载程序（不强制静默，用户能看到卸载向导）
+        private static void Uninstall(string name, string cmd)
+        {
+            if (cmd == null) cmd = "";
+            cmd = cmd.Trim();
+            if (cmd.Length == 0)
+            {
+                Ui.L("");
+                Ui.L("  " + name + " 没有登记卸载命令。", ConsoleColor.Yellow);
+                Ui.L("  请到 控制面板 → 程序和功能 手动卸载。", ConsoleColor.Gray);
+                return;
+            }
+            Ui.Blank();
+            Ui.L("  程序：" + name, ConsoleColor.Gray);
+            Ui.L("  命令：" + cmd, ConsoleColor.DarkGray);
+            if (!Tool.Confirm("确认启动这个软件自带的卸载向导？")) return;
+            Tool.Log("卸载：" + name + "  命令：" + cmd);
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = cmd;
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+                Ui.L("  卸载向导已打开，请按提示完成。", ConsoleColor.Green);
+            }
+            catch (Exception ex)
+            {
+                Ui.L("  启动卸载失败：" + Fmt.Clean(ex.Message), ConsoleColor.Red);
+                Ui.L("  请到 控制面板 → 程序和功能 手动卸载。", ConsoleColor.Gray);
+                Tool.Log("失败：" + Fmt.Clean(ex.Message));
+            }
+            string p2 = Tool.SaveLog("卸载_" + name, "");
+            if (p2.Length > 0) Ui.L("  记录：" + p2, ConsoleColor.Cyan);
         }
 
         private static List<string[]> Installed()
@@ -1081,7 +1315,12 @@ namespace StoreCheck
                                     string key = name.ToLower();
                                     if (seen.ContainsKey(key)) continue;
                                     seen[key] = true;
-                                    list.Add(new string[] { name.Trim(), Convert.ToString(sk.GetValue("InstallDate")) });
+                                    list.Add(new string[] {
+                                        name.Trim(),
+                                        Convert.ToString(sk.GetValue("InstallDate")),
+                                        Convert.ToString(sk.GetValue("UninstallString")),
+                                        Convert.ToString(sk.GetValue("QuietUninstallString"))
+                                    });
                                 }
                             }
                         }
@@ -1434,7 +1673,228 @@ namespace StoreCheck
     }
 
     // ============================================================
-    // 10. 环境自检
+    // 10. 卸载残留扫描（只报告，不自动删）
+    // ============================================================
+    internal static class ModuleResidue
+    {
+        public static void Run()
+        {
+            Tool.ResetLog();
+            Tool.Head("卸载残留扫描（只报告，不删除任何东西）");
+            string kw = Tool.Ask("要检查的软件名称/关键词（如 360、管家婆、收银）", "").Trim();
+            if (kw.Length == 0)
+            {
+                Tool.PauseExit("没有输入关键词，已退出。", ConsoleColor.Yellow);
+                return;
+            }
+
+            Ui.L("  正在查找注册表和安装目录，只读、不修改……", ConsoleColor.DarkGray);
+            List<string> regHits = new List<string>();
+            List<string> dirHits = new List<string>();
+            List<string> missing = new List<string>();
+
+            try { ScanRegistry(kw, regHits, missing); } catch (Exception) { }
+            try { ScanDirs(kw, dirHits, missing); } catch (Exception) { }
+            regHits = Dedup(regHits);
+            dirHits = Dedup(dirHits);
+            missing = Dedup(missing);
+
+            Ui.Blank();
+            if (regHits.Count == 0 && dirHits.Count == 0 && missing.Count == 0)
+            {
+                Ui.L("  没发现「" + kw + "」的卸载残留。", ConsoleColor.Green);
+            }
+            else
+            {
+                Ui.L("  发现「" + kw + "」可能的残留（只报告，不会自动删除）：", ConsoleColor.Yellow);
+                if (regHits.Count > 0)
+                {
+                    Ui.L("  注册表 " + regHits.Count + " 处：", ConsoleColor.Gray);
+                    foreach (string s in regHits) Ui.L("    · " + s, ConsoleColor.DarkGray);
+                }
+                if (dirHits.Count > 0)
+                {
+                    Ui.L("  安装目录/数据目录 " + dirHits.Count + " 处：", ConsoleColor.Gray);
+                    foreach (string s in dirHits) Ui.L("    · " + s, ConsoleColor.DarkGray);
+                }
+                if (missing.Count > 0)
+                {
+                    Ui.L("  卸载登记里已不存在的路径 " + missing.Count + " 处：", ConsoleColor.Gray);
+                    foreach (string s in missing) Ui.L("    · " + s, ConsoleColor.DarkGray);
+                }
+                Ui.Blank();
+                Ui.L("  确认软件确实不用了，再手动删除上面这些位置；", ConsoleColor.Yellow);
+                Ui.L("  删注册表前，先右键导出 .reg 备份。本工具不替你删。", ConsoleColor.Yellow);
+            }
+
+            foreach (string s in regHits) Tool.Log("注册表：" + s);
+            foreach (string s in dirHits) Tool.Log("目录：" + s);
+            foreach (string s in missing) Tool.Log("登记路径不存在：" + s);
+            string p = Tool.SaveLog("卸载残留扫描_" + kw, "关键词：" + kw + "；注册表 " + regHits.Count + "，目录 " + dirHits.Count);
+            if (p.Length > 0) Ui.L("  记录：" + p, ConsoleColor.Cyan);
+            Tool.PauseExit("", ConsoleColor.Gray);
+        }
+
+        private static void ScanRegistry(string kw, List<string> hits, List<string> missing)
+        {
+            string[] unroots = new string[] {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
+            RegistryHive[] hives = new RegistryHive[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser };
+            foreach (RegistryHive hive in hives)
+            {
+                foreach (string root in unroots)
+                {
+                    try
+                    {
+                        using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64))
+                        using (RegistryKey k = baseKey.OpenSubKey(root, false))
+                        {
+                            if (k == null) continue;
+                            foreach (string sub in k.GetSubKeyNames())
+                            {
+                                using (RegistryKey sk = k.OpenSubKey(sub, false))
+                                {
+                                    if (sk == null) continue;
+                                    string dn = Convert.ToString(sk.GetValue("DisplayName"));
+                                    string loc = Convert.ToString(sk.GetValue("InstallLocation"));
+                                    if (!string.IsNullOrEmpty(dn) && dn.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0)
+                                    {
+                                        string where = (hive == RegistryHive.LocalMachine ? "HKLM\\" : "HKCU\\") + root + "\\" + sub;
+                                        if (hits.Count < 20) hits.Add("卸载登记仍在：" + dn + "  [" + where + "]");
+                                        if (!string.IsNullOrEmpty(loc) && !Directory.Exists(loc) && missing.Count < 10)
+                                            missing.Add(loc + "（" + dn + " 登记）");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception) { }
+                }
+            }
+
+            // 软件厂商/产品键：HKLM\SOFTWARE、WOW6432Node、HKCU\Software 往下两层
+            string[] companyRoots = new string[] { @"SOFTWARE", @"SOFTWARE\WOW6432Node" };
+            foreach (string root in companyRoots)
+            {
+                ScanSubKeys(RegistryHive.LocalMachine, root, kw, hits, 0);
+            }
+            ScanSubKeys(RegistryHive.CurrentUser, @"Software", kw, hits, 0);
+        }
+
+        private static void ScanSubKeys(RegistryHive hive, string root, string kw, List<string> hits, int depth)
+        {
+            if (depth > 1 || hits.Count >= 30) return;
+            try
+            {
+                using (RegistryKey baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64))
+                using (RegistryKey k = baseKey.OpenSubKey(root, false))
+                {
+                    if (k == null) return;
+                    string[] subs = k.GetSubKeyNames();
+                    foreach (string sub in subs)
+                    {
+                        if (hits.Count >= 30) break;
+                        // 系统基础键往下翻只会产生大量误报（如类名里带 360）
+                        if (sub.Equals("Classes", StringComparison.OrdinalIgnoreCase)
+                            || sub.Equals("Microsoft", StringComparison.OrdinalIgnoreCase)
+                            || sub.Equals("Policies", StringComparison.OrdinalIgnoreCase)
+                            || sub.Equals("WOW6432Node", StringComparison.OrdinalIgnoreCase)
+                            || sub.Equals("RegisteredApplications", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        string full = root + "\\" + sub;
+                        if (sub.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            string one = (hive == RegistryHive.LocalMachine ? "HKLM\\" : "HKCU\\") + full;
+                            if (!hits.Contains(one)) hits.Add(one);
+                        }
+                        if (depth < 1) ScanSubKeys(hive, full, kw, hits, depth + 1);
+                    }
+                }
+            }
+            catch (Exception) { }
+        }
+
+        private static List<string> Dedup(List<string> list)
+        {
+            List<string> outList = new List<string>();
+            foreach (string s in list) if (!outList.Contains(s)) outList.Add(s);
+            return outList;
+        }
+
+        private static void ScanDirs(string kw, List<string> hits, List<string> missing)
+        {
+            List<string> roots = new List<string>();
+            try
+            {
+                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+                string pd = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                string la = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string ra = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                foreach (string r in new string[] { pf, pf86, pd, la, ra })
+                    if (!string.IsNullOrEmpty(r) && Directory.Exists(r) && !roots.Contains(r)) roots.Add(r);
+            }
+            catch (Exception) { }
+
+            foreach (string root in roots)
+            {
+                try
+                {
+                    foreach (string d in Directory.GetDirectories(root))
+                    {
+                        string name = Path.GetFileName(d);
+                        if (name.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            if (hits.Count < 20) hits.Add(d);
+                        }
+                    }
+                }
+                catch (Exception) { }
+            }
+
+            // 卸载登记里的目录如果存在但名字匹配，也算“可能残留”
+            string[] unroots = new string[] {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
+            foreach (string root in unroots)
+            {
+                try
+                {
+                    using (RegistryKey baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                    using (RegistryKey k = baseKey.OpenSubKey(root, false))
+                    {
+                        if (k == null) continue;
+                        foreach (string sub in k.GetSubKeyNames())
+                        {
+                            using (RegistryKey sk = k.OpenSubKey(sub, false))
+                            {
+                                if (sk == null) continue;
+                                string dn = Convert.ToString(sk.GetValue("DisplayName"));
+                                if (string.IsNullOrEmpty(dn) || dn.IndexOf(kw, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                                string loc = Convert.ToString(sk.GetValue("InstallLocation"));
+                                if (string.IsNullOrEmpty(loc)) continue;
+                                if (Directory.Exists(loc))
+                                {
+                                    if (hits.Count < 30 && !hits.Contains(loc)) hits.Add(loc);
+                                }
+                                else if (missing.Count < 10 && !missing.Contains(loc))
+                                {
+                                    missing.Add(loc + "（" + dn + " 登记）");
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception) { }
+            }
+        }
+    }
+
+    // ============================================================
+    // 11. 环境自检
     // ============================================================
     internal static class ModuleEnv
     {

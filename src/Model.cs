@@ -20,13 +20,14 @@ namespace StoreCheck
         public string PrevMeasured;  // 上次（历史对比）
         public Verdict V;
         public string Meaning;       // 意味着什么（店主能懂）
+        public string Action;        // 怎么处理（店主照着做）
         public bool TopPriority;     // 结论单置顶
         public string ConsoleLine;   // 屏幕一行结论
 
         public CheckItem()
         {
             Key = ""; Name = ""; Measured = ""; ReportValue = "";
-            PrevMeasured = ""; V = Verdict.Unknown; Meaning = "";
+            PrevMeasured = ""; V = Verdict.Unknown; Meaning = ""; Action = "";
             TopPriority = false; ConsoleLine = "";
         }
     }
@@ -113,6 +114,7 @@ namespace StoreCheck
         public DateTime EndTime;
         public Inventory Inv = new Inventory();
         public List<Block> Blocks = new List<Block>();
+        public List<string> Photos = new List<string>();   // 现场照片（data URI）
         public string Overall = "";
         public string OverallNote = "";
         public string SheetNo = "";

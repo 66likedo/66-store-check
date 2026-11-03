@@ -1,17 +1,26 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace StoreCheck
 {
     public static class Program
     {
+        private const string Ver = "1.1";
+
         public static int Main(string[] args)
         {
-            try { Console.Title = "66门店巡检 v1.1（只读检测，不修改系统）"; }
+            try { Console.Title = "66门店巡检 v" + Ver + "（只读检测，不修改系统）"; }
+            catch (Exception) { }
+
+            // 检查更新放到后台：网络慢/失败都不影响巡检，结束前只顺手看一眼结果
+            Task<string> upd = null;
+            try { upd = Task.Factory.StartNew<string>(delegate { return Update.Check(Ver); }); }
             catch (Exception) { }
 
             bool assetOnly = false;
@@ -27,7 +36,7 @@ namespace StoreCheck
             if (assetOnly) return AssetMode();
 
             // ---------------- 首屏：只三行 ----------------
-            Ui.L("共 8 项检测，预计 4–6 分钟（只读检测，不修改、不安装、不联网）", ConsoleColor.Cyan);
+            Ui.L("共 10 项检测，预计 5–7 分钟（只读检测，不修改、不安装、不联网）", ConsoleColor.Cyan);
             string store = AskRequired("门店名称：", "康泰药店 / 如家宾馆 / 老李汽修");
             string inspector = AskRequired("检测人姓名：", "六六 / 王师傅");
 
@@ -42,6 +51,9 @@ namespace StoreCheck
                 Snapshot s = RunOnce(store, inspector, dir);
                 all.Add(s);
 
+                // 现场照片（可选）：先问，再写报告，照片会内嵌进结论单
+                try { Report.AskPhotos(s); } catch (Exception) { }
+
                 Ui.Big("检测完成，正在生成报告");
 
                 string html = "", txt = "";
@@ -52,6 +64,14 @@ namespace StoreCheck
                 Ui.L("报告目录：" + Report.Dir, ConsoleColor.Cyan);
                 if (html.Length > 0) Ui.L("结论单：" + Path.GetFileName(html), ConsoleColor.Green);
                 if (txt.Length > 0) Ui.L("原始数据：" + Path.GetFileName(txt), ConsoleColor.Green);
+
+                // 一键导出同目录同名 PDF（Edge 无头打印；没装就静默跳过）
+                if (html.Length > 0)
+                {
+                    string pdf = Report.ExportPdf(html);
+                    if (pdf.Length > 0) Ui.L("PDF 版：" + Path.GetFileName(pdf), ConsoleColor.Green);
+                    else Ui.L("PDF 未生成（本机没找到 Edge）；可打开结论单后按 Ctrl+P 另存为 PDF", ConsoleColor.DarkGray);
+                }
 
                 string oc = s.Overall == "该换" ? "● 该换" : (s.Overall == "该修" ? "▲ 该修" : "■ 不用换");
                 ConsoleColor occ = s.Overall == "该换" ? ConsoleColor.Red : (s.Overall == "该修" ? ConsoleColor.Yellow : ConsoleColor.Green);
@@ -84,10 +104,24 @@ namespace StoreCheck
                 {
                     string ov = Report.WriteOverview(all, store);
                     Ui.L("本店设备总览：" + Path.GetFileName(ov), ConsoleColor.Cyan);
+                    string ovPdf = Report.ExportPdf(ov);
+                    if (ovPdf.Length > 0) Ui.L("总览 PDF：" + Path.GetFileName(ovPdf), ConsoleColor.Green);
                     Report.Open(ov);
                 }
                 catch (Exception ex) { Ui.Err("总览生成失败：" + ex.Message); }
             }
+
+            // 后台检查更新：已经返回就顺手提示，没返回就完全不打扰
+            try
+            {
+                if (upd != null && upd.IsCompleted)
+                {
+                    string tip = upd.Result;
+                    if (!string.IsNullOrEmpty(tip))
+                        Ui.L("  版本提示：" + tip, ConsoleColor.DarkCyan);
+                }
+            }
+            catch (Exception) { }
 
             Ui.Blank();
             Ui.C("  按任意键退出", ConsoleColor.Green);
@@ -144,6 +178,8 @@ namespace StoreCheck
             Task<Block> t6 = Task.Factory.StartNew(delegate { return Collect.ShellFolders(); });
             Task<Block> t7 = Task.Factory.StartNew(delegate { return Collect.Inventory(inv); });
             Task<Block> t8 = t7.ContinueWith<Block>(delegate (Task<Block> prev) { return Collect.Experience(inv); });
+            Task<Block> t9 = Task.Factory.StartNew(delegate { return Collect.Peripherals(); });
+            Task<Block> t10 = Task.Factory.StartNew(delegate { return Collect.PosSoftware(); });
 
             s.Blocks.Add(Show(1, "C 盘空间够不够", "DiskSpace", t1));
             s.Blocks.Add(Show(2, "硬盘状况", "DiskHealth", t2));
@@ -153,6 +189,8 @@ namespace StoreCheck
             s.Blocks.Add(Show(6, "文件存在哪儿", "ShellFolders", t6));
             s.Blocks.Add(Show(7, "电脑配置", "Inventory", t7));
             s.Blocks.Add(Show(8, "用着顺不顺手", "Experience", t8));
+            s.Blocks.Add(Show(9, "打印机/扫码枪", "Peripherals", t9));
+            s.Blocks.Add(Show(10, "收银软件在不在跑", "PosSoftware", t10));
 
             s.Inv = inv;
             s.EndTime = DateTime.Now;
@@ -188,7 +226,7 @@ namespace StoreCheck
                 b.Item.Meaning = "这项没能读出来，不影响其他项，可下次再测一次";
             }
             if (b.Item.Name.Length == 0) b.Item.Name = name;
-            Ui.Item(idx, 8, name, b.Item.ConsoleLine, b.Item.V);
+            Ui.Item(idx, 10, name, b.Item.ConsoleLine, b.Item.V);
             Ui.Pause(400);
             return b;
         }
@@ -246,6 +284,69 @@ namespace StoreCheck
                 return "SC-" + DateTime.Now.ToString("yyyyMMdd") + "-" + h.ToString("X4");
             }
             catch (Exception) { return "SC-" + DateTime.Now.ToString("yyyyMMdd") + "-0000"; }
+        }
+    }
+
+    /// 检查更新：只读 GitHub 最新 release 的 tag，网络失败一律静默
+    internal static class Update
+    {
+        private const string Repo = "66likedo/66-store-check";
+
+        public static string Check(string localVer)
+        {
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create("https://api.github.com/repos/" + Repo + "/releases/latest");
+                req.UserAgent = "66store-check/" + localVer;
+                req.Accept = "application/vnd.github+json";
+                req.Timeout = 4000;
+                req.ReadWriteTimeout = 4000;
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                {
+                    string json = sr.ReadToEnd();
+                    Match m = Regex.Match(json, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
+                    if (!m.Success) return "";
+                    string tag = m.Groups[1].Value.Trim();
+                    if (Compare(tag, localVer) > 0)
+                        return "发现新版 " + tag + "（当前 v" + localVer + "），可到 GitHub 下载";
+                }
+            }
+            catch (Exception) { }
+            return "";
+        }
+
+        /// 只比较数字段：v1.2.0 / 1.2 都认，认不出就当没更新
+        private static int Compare(string a, string b)
+        {
+            int[] x = Parts(a), y = Parts(b);
+            int n = Math.Max(x.Length, y.Length);
+            for (int i = 0; i < n; i++)
+            {
+                int p = i < x.Length ? x[i] : 0;
+                int q = i < y.Length ? y[i] : 0;
+                if (p != q) return p > q ? 1 : -1;
+            }
+            return 0;
+        }
+
+        private static int[] Parts(string s)
+        {
+            try
+            {
+                string t = (s == null ? "" : s.Trim()).TrimStart('v', 'V');
+                string[] seg = t.Split('.', '-', '_');
+                List<int> nums = new List<int>();
+                foreach (string one in seg)
+                {
+                    int v;
+                    if (int.TryParse(one, out v)) nums.Add(v);
+                    else break;
+                }
+                return nums.ToArray();
+            }
+            catch (Exception) { return new int[0]; }
         }
     }
 }

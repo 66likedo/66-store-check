@@ -665,6 +665,11 @@ namespace StoreCheck
             if (bootErr.Length > 0) b.Lines.Add("事件日志读取失败：" + bootErr);
             b.Lines.Add("开机耗时中位数：" + (median > 0 ? Fmt.Sec(median) : "未检测（需管理员）"));
 
+            // 系统日志里的“实际开机耗时”（Kernel-Boot 100），作为旁证
+            long realBoot = KernelBootMs();
+            if (realBoot > 0) b.Lines.Add("系统日志记录的实际开机：" + Fmt.Sec(realBoot) + "（Kernel-Boot）");
+            else b.Lines.Add("系统日志记录的实际开机：未读到（需管理员或该机器未记录）");
+
             long up = 0;
             try { up = Environment.TickCount; } catch (Exception) { }
             if (up > 0) b.Lines.Add("本次已连续运行：" + Fmt.Uptime(up) + "（未经重启）");
@@ -748,15 +753,18 @@ namespace StoreCheck
                 b.Lines.Add("判定：" + si.Name + " → " + (si.Missing ? "指向的程序已不存在" : (si.Updater ? "升级/助手类，可关" : "保留")));
             }
 
-            string bootText = median > 0 ? Fmt.Sec(median) + "（近 " + boots.Count + " 次中位数）" : "未检测（需管理员）";
+            string bootText = median > 0 ? Fmt.Sec(median) + "（近 " + boots.Count + " 次中位数）"
+                : (realBoot > 0 ? Fmt.Sec(realBoot) + "（系统日志记录的实际开机）" : "未检测（需管理员）");
+            if (median > 0 && realBoot > 0)
+                bootText += "；系统日志实际 " + Fmt.Sec(realBoot);
             it.Measured = "开机耗时：" + bootText + Environment.NewLine
                 + "启动项：有效 " + eff.Count + " 项（注册表登记 " + items.Count + " 条"
                 + (dupEdge > 1 ? "，Edge 重复 " + (dupEdge - 1) + " 条" : "") + "），可安全关闭 " + safe + " 项"
                 + (safeNames.Count > 0 ? Environment.NewLine + "可关：" + string.Join("、", safeNames.ToArray()) : "")
                 + Environment.NewLine + "已连续运行：" + Fmt.Uptime(up);
-            it.ReportValue = "开机 " + (median > 0 ? Fmt.Sec(median) : "这次没测到，下次用管理员身份补测") + Environment.NewLine
+            it.ReportValue = "开机 " + (median > 0 ? Fmt.Sec(median) : (realBoot > 0 ? Fmt.Sec(realBoot) + "（系统日志）" : "这次没测到，下次用管理员身份补测")) + Environment.NewLine
                 + "开机自动启动的程序 " + eff.Count + " 个，可关 " + safe + " 个";
-            it.ConsoleLine = "开机 " + (median > 0 ? Fmt.Sec(median) : "未检测") + "，自启程序 " + eff.Count + " 个";
+            it.ConsoleLine = "开机 " + (median > 0 ? Fmt.Sec(median) : (realBoot > 0 ? Fmt.Sec(realBoot) : "未检测")) + "，自启程序 " + eff.Count + " 个";
 
             Verdict vBoot = Verdict.Unknown;
             if (median > 0)
@@ -790,6 +798,7 @@ namespace StoreCheck
             else it.Meaning = "开机速度正常，不用优化，这一项不用花钱";
 
             b.Keys["开机秒数"] = median > 0 ? (median / 1000.0).ToString("0") : "";
+            b.Keys["实际开机秒数"] = realBoot > 0 ? (realBoot / 1000.0).ToString("0") : "";
             b.Keys["启动项数"] = eff.Count.ToString();
             b.Keys["启动项可安全关闭数"] = safe.ToString();
             return b;
@@ -800,6 +809,36 @@ namespace StoreCheck
             string[] arr = new string[list.Count];
             for (int i = 0; i < list.Count; i++) arr[i] = list[i].ToString();
             return arr;
+        }
+
+        /// 读最近一次 Kernel-Boot 事件 100 的 BootTime（单位通常是 100 纳秒，换算成毫秒）
+        private static long KernelBootMs()
+        {
+            try
+            {
+                EventLogQuery q = new EventLogQuery("Microsoft-Windows-Kernel-Boot/Operational",
+                    PathType.LogName, "*[System[EventID=100]]");
+                q.ReverseDirection = true;
+                using (EventLogReader r = new EventLogReader(q))
+                {
+                    EventRecord rec = null;
+                    try { rec = r.ReadEvent(); } catch (Exception) { }
+                    if (rec == null) return 0;
+                    string xml = "";
+                    try { xml = rec.ToXml(); } finally { try { rec.Dispose(); } catch (Exception) { } }
+                    if (xml.Length == 0) return 0;
+                    XmlDocument doc = new XmlDocument();
+                    doc.LoadXml(xml);
+                    XmlNode n = doc.SelectSingleNode("//*[local-name()='Data'][@Name='BootTime']");
+                    if (n == null) return 0;
+                    long v = 0;
+                    long.TryParse(n.InnerText.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out v);
+                    if (v <= 0) return 0;
+                    // 100ns 单位：真实开机一般 1e8~1e10；小于 1e6 的值按毫秒处理
+                    return v > 1000000 ? v / 10000 : v;
+                }
+            }
+            catch (Exception) { return 0; }
         }
 
         private static long BootMsFromXml(string xml)
@@ -1090,10 +1129,40 @@ namespace StoreCheck
             }
             b.Lines.Add("DNS 解析：" + string.Join("，", logs.ToArray()) + dnsNote);
 
+            // 局域网可达：从 ARP 邻居里挑几台（排除网关）实际 ping 一遍
+            int lanProbes = 0, lanOk = 0;
+            List<string> lanLogs = new List<string>();
+            try
+            {
+                List<string> neighbors = ArpNeighbors(gw.ToString());
+                using (Ping p2 = new Ping())
+                {
+                    int max = neighbors.Count > 5 ? 5 : neighbors.Count;
+                    for (int i = 0; i < max; i++)
+                    {
+                        lanProbes++;
+                        try
+                        {
+                            PingReply r2 = p2.Send(neighbors[i], 600);
+                            bool ok = r2 != null && r2.Status == IPStatus.Success;
+                            if (ok) { lanOk++; lanLogs.Add(neighbors[i] + " 通 " + r2.RoundtripTime + "ms"); }
+                            else lanLogs.Add(neighbors[i] + " 不通");
+                        }
+                        catch (Exception) { lanLogs.Add(neighbors[i] + " 不通"); }
+                    }
+                }
+            }
+            catch (Exception) { }
+            if (lanProbes > 0)
+                b.Lines.Add("局域网其他设备：探测 " + lanProbes + " 台，可达 " + lanOk + " 台（" + string.Join("，", lanLogs.ToArray()) + "）");
+            else
+                b.Lines.Add("局域网其他设备：ARP 表里只有网关，暂无其他设备（门店只有一台电脑属正常）");
+
             string meas = "网关 " + gw.ToString() + "：平均延迟 " + avg.ToString("0.0") + "ms，丢包 " + loss.ToString("0.0") + "%（20 包）"
                 + Environment.NewLine
                 + (dnsAvg >= 0 ? "DNS 解析平均 " + dnsAvg.ToString("0") + "ms（" + dnsOk + "/3 个域名成功）" + dnsNote : "DNS 解析：未检测（域名解析失败）");
             if (dns.Count > 0) meas += Environment.NewLine + "DNS 服务器：" + string.Join(" / ", dns.ToArray());
+            if (lanProbes > 0) meas += Environment.NewLine + "局域网邻居可达 " + lanOk + "/" + lanProbes + " 台";
             it.Measured = meas;
             it.ReportValue = "反应 " + avg.ToString("0") + " 毫秒（越小越顺）；掉包 " + loss.ToString("0") + "%" + Environment.NewLine
                 + (dnsAvg >= 0 ? "打开网页等待 " + dnsAvg.ToString("0") + " 毫秒" : "网页测试未完成");
@@ -1544,6 +1613,341 @@ namespace StoreCheck
             foreach (string m in ms)
                 if (name.IndexOf(m, StringComparison.OrdinalIgnoreCase) >= 0) return true;
             return false;
+        }
+
+        /// 从 ARP 表里取同网段邻居（排除网关、本机地址、广播/组播）
+        private static List<string> ArpNeighbors(string gateway)
+        {
+            List<string> list = new List<string>();
+            List<string> locals = new List<string>();
+            try
+            {
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    foreach (UnicastIPAddressInformation u in ni.GetIPProperties().UnicastAddresses)
+                        if (u.Address != null && u.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                            locals.Add(u.Address.ToString());
+                }
+            }
+            catch (Exception) { }
+
+            string outp = CmdOut("arp.exe", "-a", 4000);
+            if (outp.Length == 0) return list;
+            string[] lines = outp.Replace("\r", "").Split('\n');
+            foreach (string line in lines)
+            {
+                string[] t = line.Trim().Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (t.Length < 2) continue;
+                string ip = t[0];
+                IPAddress addr = null;
+                if (!IPAddress.TryParse(ip, out addr)) continue;
+                if (ip.StartsWith("127.") || ip.StartsWith("255.") || ip == "0.0.0.0") continue;
+                // 组播 224–239 / 广播 / 网络地址（常见 /24 网段）
+                if (addr.GetAddressBytes()[0] >= 224 && addr.GetAddressBytes()[0] <= 239) continue;
+                if (ip.EndsWith(".255") || ip.EndsWith(".0")) continue;
+                if (ip == gateway) continue;
+                if (locals.Contains(ip)) continue;
+                // 第二列必须是 MAC 地址（含 - 或 :），否则不是有效邻居行
+                string mac = t[1];
+                if (mac.IndexOf('-') < 0 && mac.IndexOf(':') < 0) continue;
+                if (!list.Contains(ip)) list.Add(ip);
+            }
+            return list;
+        }
+
+        // ==========================================================
+        // 9. 打印机 / 扫码枪 / 收银外设
+        // ==========================================================
+        public static Block Peripherals()
+        {
+            Block b = new Block();
+            CheckItem it = b.Item;
+            it.Key = "Peripherals";
+            it.Name = "打印机/扫码枪";
+
+            List<string> printers = new List<string>();
+            List<string> pnpPrinters = new List<string>();
+            List<string> scannerDevices = new List<string>();
+            List<string> serialPorts = new List<string>();
+            int offline = 0, errors = 0;
+            bool hasDefault = false;
+
+            try
+            {
+                foreach (ManagementObject o in Wmi.Q(@"root\cimv2",
+                    "SELECT Name,Default,WorkOffline,PrinterStatus,PortName FROM Win32_Printer"))
+                {
+                    string name = Fmt.Clean(Wmi.S(o, "Name"));
+                    if (name.Length == 0) continue;
+                    if (IsVirtualPrinter(name)) continue;
+
+                    bool def = false, off = false;
+                    int st = 0;
+                    try { def = Convert.ToBoolean(o["Default"], CultureInfo.InvariantCulture); } catch (Exception) { }
+                    try { off = Convert.ToBoolean(o["WorkOffline"], CultureInfo.InvariantCulture); } catch (Exception) { }
+                    try { st = Convert.ToInt32(o["PrinterStatus"], CultureInfo.InvariantCulture); } catch (Exception) { }
+
+                    // PrinterStatus：7=离线，6=已停止，0/2=未知，其余按状态文字判断
+                    string state = off ? "脱机" : (st == 7 ? "离线" : (st == 6 ? "已停止" : (st == 4 ? "正在打印" : "就绪")));
+                    if (off || st == 7) offline++;
+                    if (st == 6) errors++;
+                    if (def) hasDefault = true;
+                    printers.Add(name + (def ? "（默认）" : "") + "  " + state);
+                    b.Lines.Add("打印机：" + name + (def ? "  [默认]" : "") + "  状态：" + state
+                        + "  端口：" + Wmi.S(o, "PortName"));
+                }
+
+                foreach (ManagementObject o in Wmi.Q(@"root\cimv2", "SELECT DeviceID,Description FROM Win32_SerialPort"))
+                {
+                    string id = Wmi.S(o, "DeviceID");
+                    string desc = Fmt.Clean(Wmi.S(o, "Description"));
+                    if (id.Length == 0) continue;
+                    serialPorts.Add(id + (desc.Length > 0 ? "（" + desc + "）" : ""));
+                    b.Lines.Add("串口：" + id + "  " + desc);
+                }
+
+                string[] kw = new string[] {
+                    "print", "cash", "scanner", "scan", "barcode", "bar code",
+                    "扫码", "收银", "打印", "小票", "标签", "钱箱", "读卡", "刷卡",
+                    "thermal", "receipt", "ch340", "cp210", "ftdi", "prolific", "usb-serial"
+                };
+                foreach (ManagementObject o in Wmi.Q(@"root\cimv2",
+                    "SELECT Name,PNPClass,Status,ConfigManagerErrorCode,Manufacturer FROM Win32_PnPEntity WHERE PNPClass='USB' OR PNPClass='Ports' OR PNPClass='Printer'"))
+                {
+                    string name = Fmt.Clean(Wmi.S(o, "Name"));
+                    if (name.Length == 0) continue;
+                    string cls = Wmi.S(o, "PNPClass");
+                    bool printer = cls == "Printer" || name.IndexOf("打印", StringComparison.Ordinal) >= 0
+                        || name.IndexOf("printer", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (printer && IsVirtualPrinter(name)) continue;
+                    bool hit = printer;
+                    foreach (string k in kw)
+                        if (name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0) { hit = true; break; }
+                    if (!hit) continue;
+                    int code = 0;
+                    try { code = Convert.ToInt32(o["ConfigManagerErrorCode"], CultureInfo.InvariantCulture); } catch (Exception) { }
+                    string st = Wmi.S(o, "Status");
+                    if (printer)
+                    {
+                        string one = name + (code == 0 ? "  正常" : "  异常（代码 " + code + "）");
+                        if (!pnpPrinters.Contains(one)) pnpPrinters.Add(one);
+                        b.Lines.Add("打印设备：" + name + "  状态：" + (st.Length > 0 ? st : "未上报")
+                            + (code != 0 ? "  错误代码 " + code : ""));
+                        if (code != 0) errors++;
+                    }
+                    else if (!scannerDevices.Contains(name))
+                    {
+                        scannerDevices.Add(name);
+                        b.Lines.Add("外设：" + name + "  " + (cls.Length > 0 ? cls + "  " : "") + (st.Length > 0 ? st : ""));
+                        if (code != 0) errors++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                b.Lines.Add("外设读取异常：" + Fmt.Clean(ex.Message));
+                it.V = Verdict.Unknown;
+                it.Measured = "未检测（" + Fmt.Clean(ex.Message) + "）";
+                it.ReportValue = "未检测";
+                it.ConsoleLine = "未检测";
+                it.Meaning = "这一项没读出来，不影响其他项";
+                return b;
+            }
+
+            int realPrinters = printers.Count;
+            if (realPrinters == 0) realPrinters = pnpPrinters.Count;
+            if (realPrinters > 0 && !hasDefault && printers.Count > 0) errors++;
+
+            string rv = realPrinters > 0 ? "打印机 " + realPrinters + " 台" + (hasDefault ? "（有默认）" : (printers.Count > 0 ? "（无默认）" : ""))
+                : "没检测到打印机";
+            if (scannerDevices.Count > 0) rv += "；扫码/收银外设 " + scannerDevices.Count + " 个";
+            if (serialPorts.Count > 0) rv += "；串口 " + serialPorts.Count + " 个";
+
+            it.Measured = "打印机：" + (printers.Count > 0 ? string.Join("；", printers.ToArray())
+                    : (pnpPrinters.Count > 0 ? string.Join("；", pnpPrinters.ToArray()) : "未检测到"))
+                + (scannerDevices.Count > 0 ? Environment.NewLine + "扫码/收银外设：" + string.Join("、", scannerDevices.ToArray()) : "")
+                + (serialPorts.Count > 0 ? Environment.NewLine + "串口：" + string.Join("、", serialPorts.ToArray()) : "");
+            it.ReportValue = rv;
+            it.ConsoleLine = rv;
+
+            if (realPrinters == 0 && scannerDevices.Count == 0 && serialPorts.Count == 0)
+            {
+                it.V = Verdict.Warn;
+                it.Meaning = "没找到打印机、扫码枪或串口设备。如果店里本来有小票/标签打印机，请检查电源、USB 线和驱动";
+            }
+            else if (offline > 0 || errors > 0)
+            {
+                it.V = Verdict.Bad;
+                it.Meaning = "打印机脱机或设备异常，收银时可能打不出小票、扫不了码，建议先重启打印机并检查 USB 线";
+                it.TopPriority = true;
+            }
+            else
+            {
+                it.V = Verdict.Normal;
+                it.Meaning = "打印机和收银外设都能正常识别，这一项不用花钱";
+            }
+
+            b.Keys["打印机数"] = realPrinters.ToString();
+            b.Keys["打印机脱机数"] = offline.ToString();
+            b.Keys["外设异常数"] = errors.ToString();
+            return b;
+        }
+
+        private static bool IsVirtualPrinter(string name)
+        {
+            string[] kw = new string[] {
+                "Microsoft Print to PDF", "Microsoft XPS", "Fax", "OneNote",
+                "Send To OneNote", "虚拟", "Virtual", "WPS PDF", "Foxit PDF",
+                "Adobe PDF", "PDFCreator", "CutePDF", "IPP Class Driver", "Universal Print"
+            };
+            foreach (string k in kw)
+                if (name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
+        // ==========================================================
+        // 10. 收银软件 / ERP 是否在运行
+        // ==========================================================
+        public static Block PosSoftware()
+        {
+            Block b = new Block();
+            CheckItem it = b.Item;
+            it.Key = "PosSoftware";
+            it.Name = "收银软件在不在跑";
+
+            List<string> procs = new List<string>();
+            List<string> services = new List<string>();
+            try
+            {
+                string[] kw = PosKeywords();
+                foreach (Process p in Process.GetProcesses())
+                {
+                    try
+                    {
+                        string pn = p.ProcessName == null ? "" : p.ProcessName;
+                        if (pn.Length == 0) continue;
+                        foreach (string k in kw)
+                        {
+                            if (k.Length == 0) continue;
+                            if (PosHit(pn, k))
+                            {
+                                if (!procs.Contains(pn)) procs.Add(pn);
+                                break;
+                            }
+                        }
+                    }
+                    catch (Exception) { }
+                }
+
+                foreach (ManagementObject o in Wmi.Q(@"root\cimv2", "SELECT Name,DisplayName,State FROM Win32_Service"))
+                {
+                    string nm = Wmi.S(o, "Name");
+                    string dn = Fmt.Clean(Wmi.S(o, "DisplayName"));
+                    if (Wmi.S(o, "State") != "Running") continue;
+                    foreach (string k in kw)
+                    {
+                        if (k.Length == 0) continue;
+                        if (PosHit(nm + " " + dn, k))
+                        {
+                            string label = dn.Length > 0 ? dn : nm;
+                            if (!services.Contains(label)) services.Add(label);
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                b.Lines.Add("收银软件检测异常：" + Fmt.Clean(ex.Message));
+            }
+
+            b.Lines.Add("识别到正在运行的收银/ERP 进程：" + (procs.Count > 0 ? string.Join("、", procs.ToArray()) : "无"));
+            b.Lines.Add("识别到正在运行的收银相关服务：" + (services.Count > 0 ? string.Join("、", services.ToArray()) : "无"));
+            b.Lines.Add("说明：可在程序目录放“收银软件清单.txt”，每行写一个进程/服务关键词，下次就会按清单识别。");
+
+            if (procs.Count > 0 || services.Count > 0)
+            {
+                it.V = Verdict.Normal;
+                it.ReportValue = "正在运行：" + Fmt.Cut(procs.Count > 0 ? string.Join("、", procs.ToArray()) : string.Join("、", services.ToArray()), 40);
+                it.ConsoleLine = "收银软件在运行";
+                it.Meaning = "收银/ERP 软件正在运行，结账流程不受影响，这一项不用花钱";
+            }
+            else
+            {
+                it.V = Verdict.Warn;
+                it.ReportValue = "没发现收银软件在运行";
+                it.ConsoleLine = "没发现收银软件";
+                it.Meaning = "没发现收银软件在跑。若现在不营业或用网页收银可忽略；否则先打开它确认能结账";
+            }
+            it.Measured = it.ReportValue;
+            b.Keys["收银软件运行数"] = (procs.Count + services.Count).ToString();
+            return b;
+        }
+
+        /// 关键词匹配：pos 太短，只认开头/结尾，避免把 repository/composite 当成收银软件
+        private static bool PosHit(string text, string keyword)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(keyword)) return false;
+            if (keyword.Equals("pos", StringComparison.OrdinalIgnoreCase))
+                return text.StartsWith("pos", StringComparison.OrdinalIgnoreCase)
+                    || text.EndsWith("pos", StringComparison.OrdinalIgnoreCase);
+            return text.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// 默认关键词 + 程序目录下“收银软件清单.txt”的自定义关键词（每行一个）
+        private static string[] PosKeywords()
+        {
+            List<string> list = new List<string>();
+            string[] def = new string[] {
+                "收银", "pos", "cashier", "零售", "管家婆", "思迅", "科脉", "海鼎",
+                "银豹", "客如云", "美团收银", "二维火", "哗啦啦", "天店", "千里马",
+                "中崎", "佳博", "商米", "银收", "erp", "进销存"
+            };
+            foreach (string d in def) list.Add(d);
+            try
+            {
+                string file = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "收银软件清单.txt");
+                if (File.Exists(file))
+                {
+                    foreach (string line in File.ReadAllLines(file, Encoding.UTF8))
+                    {
+                        string t = line.Trim();
+                        if (t.Length == 0 || t.StartsWith("#")) continue;
+                        if (!list.Contains(t)) list.Add(t);
+                    }
+                }
+            }
+            catch (Exception) { }
+            return list.ToArray();
+        }
+
+        // ==========================================================
+        // 网络辅助：局域网邻居探测
+        // ==========================================================
+        private static string CmdOut(string exe, string args, int timeoutMs)
+        {
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = exe;
+                psi.Arguments = args;
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                using (Process p = new Process())
+                {
+                    p.StartInfo = psi;
+                    p.Start();
+                    string o = p.StandardOutput.ReadToEnd();
+                    p.StandardError.ReadToEnd();
+                    p.WaitForExit(timeoutMs);
+                    return o;
+                }
+            }
+            catch (Exception) { return ""; }
         }
     }
 }

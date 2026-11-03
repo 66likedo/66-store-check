@@ -86,6 +86,33 @@ namespace StoreCheck
         // ------------------------------------------------------------
         // 建议动作（技术员看的，不是店主看的）
         // ------------------------------------------------------------
+        /// 给店主的三句话（白话）：现状 / 花不花钱 / 先做哪件
+        private static string[] PlainSummary(Snapshot s, int bad, int warn)
+        {
+            CheckItem top = null;
+            foreach (Block b in s.Blocks) if (b.Item.V == Verdict.Bad && b.Item.TopPriority) { top = b.Item; break; }
+            if (top == null) foreach (Block b in s.Blocks) if (b.Item.V == Verdict.Bad) { top = b.Item; break; }
+            if (top == null) foreach (Block b in s.Blocks) if (b.Item.V == Verdict.Warn) { top = b.Item; break; }
+
+            string now = bad > 0
+                ? "这台电脑有 " + bad + " 处必须处理的问题，现在还能用，但拖久了可能影响收银"
+                : (warn > 0 ? "这台电脑整体能用，有 " + warn + " 处建议尽快处理" : "这台电脑目前状态正常，这次不用修也不用换");
+            string money = bad > 0
+                ? "先把 P1 的应急项目做掉，其余不着急，具体费用看第 2 节"
+                : (warn > 0 ? "做几项常规维护即可，费用看第 2 节，不是非花不可" : "这次不用花钱，每月把账目和会员数据备份一次就行");
+            string first = top != null
+                ? "先处理「" + top.Name + "」：" + FirstSentence(top.Meaning)
+                : "继续正常用，把账目、会员、监控数据每月备份到移动硬盘";
+            return new string[] { now, money, first };
+        }
+
+        private static string FirstSentence(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            string x = s.Replace("\r\n", "\n").Split('。')[0].Trim();
+            return x.Length > 0 ? x + "。" : s;
+        }
+
         private static string[] Advice(string key, Verdict v)
         {
             bool bad = v == Verdict.Bad;
@@ -182,6 +209,14 @@ namespace StoreCheck
             h.Append("<div class=\"sum\"><b>结论摘要：</b>严重 <span class=\"bd\">").Append(bad).Append("</span> 项，中等 <span class=\"wn\">")
                 .Append(warn).Append("</span> 项，未检测 <span class=\"uk\">").Append(unk).Append("</span> 项。");
             h.Append(bad > 0 ? "存在必须先处理的问题（见第 2 节 P1）。" : (warn > 0 ? "无致命问题，有若干项建议处理。" : "整体健康，无必须处理的项。"));
+            h.Append("</div>");
+
+            // 给店主的三句话：先用大白话说清现状、花不花钱、先做哪件
+            string[] plain = PlainSummary(s, bad, warn);
+            h.Append("<div class=\"sum\"><b>给店主的三句话</b><br/>");
+            h.Append("① 现在怎么样：").Append(E(plain[0])).Append("<br/>");
+            h.Append("② 要不要花钱：").Append(E(plain[1])).Append("<br/>");
+            h.Append("③ 最该先做：").Append(E(plain[2]));
             h.Append("</div>");
 
             // 1. 检测结果总表

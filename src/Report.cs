@@ -207,6 +207,71 @@ namespace StoreCheck
             return q;
         }
 
+        /// 每一项都要给店主一个能照着做的办法（白话，一句话）
+        private static string ActionText(string key, Verdict v)
+        {
+            if (key == "DiskSpace")
+            {
+                if (v == Verdict.Bad) return "清缓存和回收站；不够就加硬盘或挪走大文件";
+                if (v == Verdict.Warn) return "清一次缓存、临时文件和回收站";
+                return "够用，每季度看一眼";
+            }
+            if (key == "DiskHealth")
+            {
+                if (v == Verdict.Bad) return "今天先备份，再换新硬盘";
+                if (v == Verdict.Warn) return "两天内备份数据，再安排换盘";
+                if (v == Verdict.Unknown) return "用厂家工具复测一次再定";
+                return "每年看一眼健康数据";
+            }
+            if (key == "Boot")
+            {
+                if (v == Verdict.Bad) return "关掉没用的启动项，开机能快一半";
+                if (v == Verdict.Warn) return "不认识的先禁用，观察一周";
+                return "不用动";
+            }
+            if (key == "Sfc")
+            {
+                if (v == Verdict.Bad) return "管理员身份跑 sfc /scannow，完事重启";
+                if (v == Verdict.Unknown) return "换管理员身份重跑一次";
+                return "不用动";
+            }
+            if (key == "Network")
+            {
+                if (v == Verdict.Bad) return "换网线、重压水晶头，再重启路由器";
+                if (v == Verdict.Warn) return "查网线松紧和路由器散热";
+                return "不用动";
+            }
+            if (key == "ShellFolders")
+            {
+                if (v == Verdict.Bad) return "把桌面和文档改回默认位置";
+                if (v == Verdict.Warn) return "先问清是不是故意搬到网盘";
+                return "不用动";
+            }
+            if (key == "Inventory")
+            {
+                if (v == Verdict.Bad) return "6-12 个月内规划换机";
+                return "记进设备台账，下次对比";
+            }
+            if (key == "Experience")
+            {
+                if (v == Verdict.Bad) return "卸掉多余的管家，只留一个";
+                if (v == Verdict.Warn) return "看看弹窗是谁加的，不用的卸载";
+                return "不用动";
+            }
+            if (key == "Peripherals")
+            {
+                if (v == Verdict.Bad) return "重启打印机，换一根 USB 线再打一张测试小票";
+                if (v == Verdict.Warn) return "确认打印机电源和线都插好，再打一张小票试试";
+                return "不用动";
+            }
+            if (key == "PosSoftware")
+            {
+                if (v == Verdict.Normal) return "不用动";
+                return "开店前先打开收银软件试结一单";
+            }
+            return "";
+        }
+
         private static Verdict VOf(Snapshot s, string key)
         {
             foreach (Block b in s.Blocks) if (b.Item.Key == key) return b.Item.V;
@@ -251,32 +316,35 @@ namespace StoreCheck
             h.Append("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"/>");
             h.Append("<title>电脑体检单 - ").Append(E(s.DeviceName)).Append("</title>");
             h.Append("<style>");
-            h.Append("@page{size:A4 portrait;margin:11mm;}");
+            h.Append("@page{size:A4 portrait;margin:8mm;}");
             h.Append("html,body{margin:0;padding:0;background:#fff;color:#000;}");
-            h.Append("body{font-family:\"Microsoft YaHei\",\"微软雅黑\",SimSun,sans-serif;font-size:10.5pt;line-height:1.18;}");
+            h.Append("body{font-family:\"Microsoft YaHei\",\"微软雅黑\",SimSun,sans-serif;font-size:9.4pt;line-height:1.08;}");
             h.Append(".hdwrap{padding-bottom:1.2mm;}");
             h.Append(".rule{height:0;border-top:1.5px solid #000;margin:0 0 1.6mm 0;}");
-            h.Append(".hdwrap h1{font-size:14pt;margin:0;letter-spacing:2px;}");
-            h.Append(".sub{font-size:8.6pt;color:#333;margin-top:0.6mm;}");
-            h.Append(".no{text-align:right;font-size:8.6pt;white-space:nowrap;vertical-align:bottom;}");
-            h.Append(".bar{border:0.7px solid #000;padding:1mm 1.6mm;margin-bottom:1.4mm;font-size:9.2pt;line-height:1.2;}");
+            h.Append(".hdwrap h1{font-size:13.2pt;margin:0;letter-spacing:2px;}");
+            h.Append(".sub{font-size:8.2pt;color:#333;margin-top:0.5mm;}");
+            h.Append(".no{text-align:right;font-size:8.2pt;white-space:nowrap;vertical-align:bottom;}");
+            h.Append(".bar{border:0.7px solid #000;padding:0.7mm 1.6mm;margin-bottom:0.9mm;font-size:8.8pt;line-height:1.1;}");
             h.Append(".bar span{margin-right:4mm;white-space:nowrap;}");
-            h.Append("table.grid{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9.8pt;line-height:1.24;}");
-            h.Append("table.grid th{border:0.7px solid #000;padding:0.7mm 1.1mm;background:#f0f0f0;text-align:left;font-weight:bold;}");
-            h.Append("table.grid td{border:0.7px solid #000;padding:0.45mm 1.1mm;vertical-align:top;}");
+            h.Append("table.grid{width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.95pt;line-height:1.1;}");
+            h.Append("table.grid th{border:0.7px solid #000;padding:0.5mm 1mm;background:#f0f0f0;text-align:left;font-weight:bold;}");
+            h.Append("table.grid td{border:0.7px solid #000;padding:0.2mm 0.9mm;vertical-align:top;}");
             h.Append("td.nm{width:27mm;}td.ms{width:51mm;}td.pv{width:21mm;}td.vd{width:17mm;white-space:nowrap;}");
             h.Append(".ok{color:#0a7a2c;font-weight:bold;}.wn{color:#b06a00;font-weight:bold;}");
             h.Append(".bd{color:#c00000;font-weight:bold;}.uk{color:#666;font-weight:bold;}");
-            h.Append(".blk{border:0.7px solid #000;padding:0.8mm 1.6mm;margin-top:0.9mm;}");
-            h.Append(".ttl{font-weight:bold;font-size:9.8pt;margin-bottom:0.4mm;}");
-            h.Append(".ln{margin:0.4mm 0;font-size:9pt;}");
+            h.Append(".blk{border:0.7px solid #000;padding:0.5mm 1.4mm;margin-top:0.5mm;}");
+            h.Append(".ttl{font-weight:bold;font-size:9.1pt;margin-bottom:0.25mm;}");
+            h.Append(".ln{margin:0.15mm 0;font-size:8.2pt;}");
             h.Append(".fill{display:inline-block;border-bottom:0.7px solid #000;height:4mm;min-width:70mm;}");
-            h.Append("table.q{width:100%;border-collapse:collapse;font-size:9.2pt;margin-top:0.8mm;}");
-            h.Append("table.q th,table.q td{border:0.7px solid #000;padding:0.7mm 1.2mm;text-align:left;}");
+            h.Append("table.q{width:100%;border-collapse:collapse;font-size:8.7pt;margin-top:0.5mm;}");
+            h.Append("table.q th,table.q td{border:0.7px solid #000;padding:0.5mm 1.2mm;text-align:left;}");
             h.Append("table.q th{background:#f0f0f0;}");
-            h.Append("table.sg{width:100%;border-collapse:collapse;margin-top:1.4mm;font-size:9.4pt;}");
-            h.Append("table.sg td{border:0.7px solid #000;padding:0.4mm 1.8mm;height:6.2mm;vertical-align:bottom;width:50%;}");
-            h.Append(".ft{font-size:7.6pt;color:#444;margin-top:1.2mm;}");
+            h.Append("table.sg{width:100%;border-collapse:collapse;margin-top:0.7mm;font-size:8.6pt;}");
+            h.Append("table.sg td{border:0.7px solid #000;padding:0.3mm 1.8mm;height:4.6mm;vertical-align:bottom;width:50%;}");
+            h.Append(".ft{font-size:7pt;color:#444;margin-top:0.5mm;}");
+            h.Append(".act{font-size:7.9pt;color:#111;}");
+            h.Append(".ph{display:flex;flex-wrap:wrap;gap:1.5mm;margin-top:0.6mm;}");
+            h.Append(".ph img{max-width:48%;max-height:34mm;border:0.5px solid #000;}");
             h.Append("@media print{body{-webkit-print-color-adjust:exact;}}");
             h.Append("</style></head><body>");
 
@@ -328,7 +396,11 @@ namespace StoreCheck
                 if (hasPrev) h.Append("<td class=\"pv\">").Append(Br(it.PrevMeasured)).Append("</td>");
                 h.Append("<td class=\"vd\"><span class=\"").Append(Vs.Css(it.V)).Append("\">").Append(Vs.Sym(it.V))
                     .Append("</span> ").Append(Vs.Txt(it.V)).Append("</td>");
-                h.Append("<td>").Append(E(it.Meaning)).Append("</td></tr>");
+                h.Append("<td>").Append(E(it.Meaning));
+                string act = ActionText(it.Key, it.V);
+                if (act.Length > 0)
+                    h.Append(" <span class=\"act\"><b>处理：</b>").Append(E(act)).Append("</span>");
+                h.Append("</td></tr>");
             }
             h.Append("</tbody></table>");
 
@@ -353,6 +425,16 @@ namespace StoreCheck
             h.Append("<div style=\"font-size:8.4pt;color:#444;margin-top:0.8mm\">以上是上门服务费，不含配件；以现场报价为准。</div>");
             h.Append("<div style=\"font-size:9.4pt;margin-top:1.2mm\">下次巡检建议：").Append(E(NextVisit(s))).Append("</div>");
             h.Append("</div>");
+
+            // 5.5 现场照片（可选，嵌进 HTML，不另存文件）
+            if (s.Photos.Count > 0)
+            {
+                h.Append("<div class=\"blk\"><div class=\"ttl\">现场照片（")
+                    .Append(s.Photos.Count).Append(" 张，仅本单存档）</div><div class=\"ph\">");
+                foreach (string ph in s.Photos)
+                    h.Append("<img src=\"").Append(ph).Append("\"/>");
+                h.Append("</div></div>");
+            }
 
             h.Append("<table class=\"sg\"><tr><td>客户确认签字：</td><td>检测人签字：</td></tr>");
             h.Append("<tr><td>日期：&nbsp;&nbsp;&nbsp; 年 &nbsp;&nbsp;&nbsp; 月 &nbsp;&nbsp;&nbsp; 日</td><td>日期：&nbsp;&nbsp;&nbsp; 年 &nbsp;&nbsp;&nbsp; 月 &nbsp;&nbsp;&nbsp; 日</td></tr></table>");
@@ -393,6 +475,8 @@ namespace StoreCheck
                 if (b.Item.PrevMeasured.Length > 0) t.AppendLine("上次：" + Fmt.Clean(b.Item.PrevMeasured));
                 t.AppendLine("判定：" + Vs.Sym(b.Item.V) + " " + Vs.Txt(b.Item.V));
                 t.AppendLine("意味着什么：" + b.Item.Meaning);
+                string act = ActionText(b.Item.Key, b.Item.V);
+                if (act.Length > 0) t.AppendLine("处理建议：" + act);
                 foreach (string ln in b.Lines) t.AppendLine("  " + ln);
                 t.AppendLine("");
             }
@@ -645,6 +729,100 @@ namespace StoreCheck
                 Process.Start(psi);
             }
             catch (Exception) { }
+        }
+
+        // ---------------- 一键导出 PDF ----------------
+        /// 用本机 Edge 的无头模式把结论单原样打印成 PDF（同目录、同名）
+        /// 没装 Edge / 导出超时就返回空字符串，绝不阻塞主流程太久
+        public static string ExportPdf(string htmlPath)
+        {
+            if (string.IsNullOrEmpty(htmlPath) || !File.Exists(htmlPath)) return "";
+            string edge = FindEdge();
+            if (edge.Length == 0) return "";
+            string pdf = Path.ChangeExtension(htmlPath, ".pdf");
+            try
+            {
+                if (File.Exists(pdf)) File.Delete(pdf);
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = edge;
+                psi.Arguments = "--headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf=\"" + pdf + "\" \"" + htmlPath + "\"";
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                using (Process p = new Process())
+                {
+                    p.StartInfo = psi;
+                    p.Start();
+                    if (!p.WaitForExit(20000))
+                    {
+                        try { p.Kill(); } catch (Exception) { }
+                    }
+                }
+                return File.Exists(pdf) ? pdf : "";
+            }
+            catch (Exception) { return ""; }
+        }
+
+        private static string FindEdge()
+        {
+            string[] paths = new string[] {
+                @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                @"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+            };
+            foreach (string p in paths)
+            {
+                try { if (File.Exists(p)) return p; }
+                catch (Exception) { }
+            }
+            return "";
+        }
+
+        // ---------------- 现场照片 ----------------
+        /// 交互式询问要插入的照片；只接受常见图片格式，单张 ≤2.5MB、总共 ≤5MB
+        public static void AskPhotos(Snapshot s)
+        {
+            if (s == null || Console.IsInputRedirected) return;
+            int count = 0;
+            long total = 0;
+            const long oneMax = 2621440;   // 2.5MB
+            const long sumMax = 5242880;   // 5MB
+            while (count < 3)
+            {
+                Ui.Blank();
+                Ui.C(count == 0 ? "  要插入现场照片吗？（直接回车跳过，输入图片完整路径）："
+                                : "  再加一张？直接回车结束：", ConsoleColor.Cyan);
+                string p = ReadLineSafe().Trim().Trim('"');
+                if (p.Length == 0) break;
+                try
+                {
+                    if (!File.Exists(p)) { Ui.Err("找不到这个文件：" + p); continue; }
+                    string ext = Path.GetExtension(p).ToLower();
+                    string mime;
+                    if (ext == ".jpg" || ext == ".jpeg") mime = "image/jpeg";
+                    else if (ext == ".png") mime = "image/png";
+                    else if (ext == ".bmp") mime = "image/bmp";
+                    else if (ext == ".gif") mime = "image/gif";
+                    else { Ui.Err("只支持 jpg / png / bmp / gif"); continue; }
+                    long len = new FileInfo(p).Length;
+                    if (len > oneMax) { Ui.Err("这张照片 " + Fmt.G(len) + " 太大，请压到 2.5MB 以内再试"); continue; }
+                    if (total + len > sumMax) { Ui.Err("照片总大小超过 5MB，后面的不再插入"); break; }
+                    byte[] bytes = File.ReadAllBytes(p);
+                    s.Photos.Add("data:" + mime + ";base64," + Convert.ToBase64String(bytes));
+                    total += len;
+                    count++;
+                    Ui.OK("已加入：" + Path.GetFileName(p) + "（" + Fmt.G(len) + "）");
+                }
+                catch (Exception ex) { Ui.Err("读取失败：" + Fmt.Clean(ex.Message)); }
+            }
+        }
+
+        private static string ReadLineSafe()
+        {
+            try
+            {
+                string s = Console.ReadLine();
+                return s == null ? "" : s;
+            }
+            catch (Exception) { return ""; }
         }
     }
 }
