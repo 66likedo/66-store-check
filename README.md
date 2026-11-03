@@ -8,7 +8,7 @@ Windows 10 / 11 直接运行，用系统自带的 `csc.exe` 编译，**不需要
 
 仓库已公开，下载无需登录 GitHub：
 
-https://github.com/66likedo/66-store-check/releases/download/v1.1.0/66StoreCheck-v1.1.0.zip
+https://github.com/66likedo/66-store-check/releases/download/v1.2.0/66StoreCheck-v1.2.0.zip
 
 解压后得到下面四个程序。最新版本见 [Releases](https://github.com/66likedo/66-store-check/releases)。
 
@@ -86,14 +86,14 @@ git push
 .\build.bat; .\build-pro.bat; .\build-clean.bat; .\build-tool.bat
 
 # 3. 打包（必须打包，原因见下方「已知问题」）
-$zip = "$env:TEMP\66StoreCheck-v1.1.0.zip"
+$zip = "$env:TEMP\66StoreCheck-v1.2.0.zip"
 Compress-Archive -Path .\dist\66*.exe -DestinationPath $zip -Force
 
 # 4. 建 Release 并上传
-gh release create v1.1.0 --repo 66likedo/66-store-check `
-  --title "v1.1.0 - 66门店巡检四件套" `
+gh release create v1.2.0 --repo 66likedo/66-store-check `
+  --title "v1.2.0 - 66门店巡检四件套" `
   --notes "本次更新内容……"
-gh release upload v1.1.0 $zip --repo 66likedo/66-store-check --clobber
+gh release upload v1.2.0 $zip --repo 66likedo/66-store-check --clobber
 ```
 
 注意：`gh release upload` 必须在项目目录内执行，或者带上 `--repo` 参数，否则会报 `not a git repository`。

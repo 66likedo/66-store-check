@@ -11,7 +11,7 @@ namespace StoreCheck
 {
     public static class Program
     {
-        private const string Ver = "1.1";
+        private const string Ver = "1.2";
 
         public static int Main(string[] args)
         {
@@ -41,7 +41,7 @@ namespace StoreCheck
             string inspector = AskRequired("检测人姓名：", "六六 / 王师傅");
 
             Ui.Blank();
-            Ui.L("66门店巡检 v1.1     只读检测，不修改系统", ConsoleColor.Cyan);
+            Ui.L("66门店巡检 v1.2     只读检测，不修改系统", ConsoleColor.Cyan);
             Ui.L("门店：" + store + "    检测人：" + inspector + "    设备：" + Environment.MachineName, ConsoleColor.DarkGray);
             Ui.Blank();
 

@@ -21,7 +21,7 @@ namespace StoreCheck
                 if (x == "--degraded" || x == "/degraded") _degraded = true;
             }
 
-            try { Console.Title = "66专业检测 v1.1（只读深检）"; }
+            try { Console.Title = "66专业检测 v1.2（只读深检）"; }
             catch (Exception) { }
 
             Ui.Setup();
@@ -39,7 +39,7 @@ namespace StoreCheck
             string inspector = AskRequired("检测人姓名：", "六六 / 王师傅");
 
             Ui.Blank();
-            Ui.L("66专业检测 v1.1     只读深检，不修改系统", ConsoleColor.Cyan);
+            Ui.L("66专业检测 v1.2     只读深检，不修改系统", ConsoleColor.Cyan);
             Ui.C("权限：", ConsoleColor.DarkGray);
             Ui.L(_admin ? "管理员（可读事件日志 / SFC / 服务 / 防火墙）" : "受限（未提权，部分项会标未检测）",
                 _admin ? ConsoleColor.Green : ConsoleColor.Yellow);

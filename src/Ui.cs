@@ -150,7 +150,7 @@ namespace StoreCheck
             Plain("");
             L("  " + new string('=', Cols), ConsoleColor.DarkCyan);
             C("  66门店巡检  ", ConsoleColor.Cyan);
-            L("v1.1   六六电脑服务", ConsoleColor.DarkGray);
+            L("v1.2   六六电脑服务", ConsoleColor.DarkGray);
             L("  " + subtitle, ConsoleColor.Cyan);
             L("  " + new string('=', Cols), ConsoleColor.DarkCyan);
             Plain("");

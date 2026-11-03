@@ -7,7 +7,7 @@ namespace StoreCheck
 {
     public static class ToolProgram
     {
-        private const string Ver = "1.1";
+        private const string Ver = "1.2";
 
         public static int Main(string[] args)
         {
